@@ -1,4 +1,4 @@
-name: Publish to npm
+name: Release and Publish
 
 on:
   push:
@@ -6,11 +6,11 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
-  publish:
+  publish-and-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source code
@@ -27,3 +27,16 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --access public
+
+      - name: Pack tarball for GitHub Release
+        run: npm pack
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            *.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

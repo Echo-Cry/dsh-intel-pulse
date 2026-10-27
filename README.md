@@ -84,6 +84,10 @@ DSH 原生全能插件：集「自主资讯全网检索与多端推送」与「�
 
 ## 更新日志
 
+### v0.9.3
+1. **GitHub Release 自动化构建打通**：
+   - 在 CI 流水线中集成 `softprops/action-gh-release`，推送 Tag 时自动触发 npm 发包 + 自动创建 GitHub Release 发行版并上传归档 tgz 资产。
+
 ### v0.9.2
 1. **元数据与包发布生态升级**：
    - 全面接入 npm 官方源与 GitHub Actions Trusted Publishing OIDC 自动化发布流水线；

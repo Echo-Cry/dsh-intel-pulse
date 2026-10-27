@@ -1,6 +1,6 @@
 {
   "name": "dsh-intel-pulse",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "type": "module",
   "description": "DSH全能资讯与状态中枢：自主全网热榜/自定义源/深度资讯检索，精选二次元动漫插画与点图采集（支持QQ/NapCat/IM机器人投递与收件箱画廊），全场景会话状态原生系统级Toast通知提醒。",
   "author": "Echo-Cry <kcrystal360049@gmail.com>",
