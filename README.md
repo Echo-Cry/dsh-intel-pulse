@@ -84,6 +84,15 @@ DSH 原生全能插件：集「自主资讯全网检索与多端推送」与「�
 
 ## 更新日志
 
+### v0.9.2
+1. **元数据与包发布生态升级**：
+   - 全面接入 npm 官方源与 GitHub Actions Trusted Publishing OIDC 自动化发布流水线；
+   - 扩充并完善 npm 与 GitHub 检索标签（Tags/Keywords）：新增 `toast`, `gallery`, `illustration`, `pixiv`, `anime`, `onebot`, `napcat`, `图库采集`, `系统提醒`, `点图搜图` 等核心功能标识；
+   - 优化插件简介与功能提炼，精准传达全能资讯中枢、插画画廊与系统级会话状态提醒定位。
+2. **通知与适配优化**：
+   - 完善 Windows 原生 Toast 通知注册规范，确保桌面端弹窗稳定送达；
+   - 增强状态检查与兜底逻辑。
+
 ### v0.9.0
 1. **图库采集 (插画/色图)**：
    - 新增 Lolicon / Yande.re / Danbooru 多图源聚合通道，支持全年龄至 R-18 多级内容筛选；
