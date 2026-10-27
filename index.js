@@ -191,7 +191,8 @@ export function apply(ctx) {
           .join(' ｜ '))
       }
 
-      if (!collectRes.ok || !collectRes.items?.length) {
+      const hasContent = (collectRes.items && collectRes.items.length > 0) || (collectRes.images && collectRes.images.length > 0)
+      if (!collectRes.ok || !hasContent) {
         const errorMsg = collectRes.error || '采集失败或为空'
         stateMgr.setLastError(errorMsg)
         stateMgr.recordFailure(new Date(), errorMsg)
@@ -208,8 +209,9 @@ export function apply(ctx) {
         return
       }
 
-      const entries = collectRes.items
-      const composeRes = await composeMessage(ctx, cfg, entries, signal)
+      const entries = collectRes.items || []
+      const images = collectRes.images || []
+      const composeRes = await composeMessage(ctx, cfg, entries, signal, images)
       if (!composeRes.text) {
         const errorMsg = '生成文案为空 (emptyCompose)'
         stateMgr.setLastError(errorMsg)
@@ -248,6 +250,7 @@ export function apply(ctx) {
         trail: collectRes.trail || [],
         sourcesNote: collectRes.sourcesNote || null,
         entries,
+        images,
         text: composeRes.text,
         persona: composeRes.persona || null,
         targetKind: 'session',
@@ -337,7 +340,7 @@ export function apply(ctx) {
     }, 10 * 60 * 1000)
   }
 
-  // 监听宿主全局会话事件（实现会话状态系统弹窗通知）
+  // 监听宿主全局会话事件（实现会话状态系统弹窗通知：多通道保活）
   const sessionListener = createSessionEventListener(ctx, logger)
 
   // 卸载与清理

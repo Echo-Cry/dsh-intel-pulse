@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
 			const [open, setOpen] = React.useState(props.open === true)
 			return h('details', { open, style: sectionStyle, onToggle: (e) => setOpen(e.target.open) },
 				h('summary', { style: summaryStyle }, props.title),
-				open ? h('div', { style: { paddingTop: 4 } }, props.children) : null)
+				open ? h('div', { style: { paddingTop: 4 } }, typeof props.children === 'function' ? props.children() : props.children) : null)
 		}
 		function useAsync(fetcher, deps) {
 			const [s, setS] = React.useState({ loading: true, error: null, value: null })
@@ -181,7 +181,22 @@ window.__ModuleLoader__.load({
 			const todayCount = numOr(v.todayCount, 0)
 			const maxPerDay = numOr(v.maxPerDay, 0)
 
-			const head = !v.enabled ? '现在：总开关已关闭' : (v.paused ? '现在：已暂停' : '现在：正在守着你')
+			const isCollectOn = v.collectEnabled !== false
+			const isGalleryOn = v.galleryEnabled !== false
+			let head = ''
+			if (!v.enabled) {
+				head = '现在：总开关已关闭'
+			} else if (v.paused) {
+				head = '现在：已暂停'
+			} else if (!isCollectOn && !isGalleryOn) {
+				head = '现在：资讯采集与图库采集均已关闭（待机中）'
+			} else if (isCollectOn && isGalleryOn) {
+				head = '现在：正在守着你（资讯采集 + 图库采集均已就绪）'
+			} else if (isCollectOn) {
+				head = '现在：正在守着你（仅资讯采集）'
+			} else {
+				head = '现在：正在守着你（仅图库采集）'
+			}
 			const idleLine = v.probeDown
 				? '闲置时长：读不到（闲置探测没跑起来）'
 				: '闲置时长：' + mins + ' 分钟（阈值 ' + threshold + ' 分钟，' + (reached ? '已触发' : '未触发') + '）'
@@ -206,9 +221,15 @@ window.__ModuleLoader__.load({
 					const tokens = (res.usage?.input || 0) + (res.usage?.output || 0)
 					const n = (res.targets && res.targets.length) || 0
 					const failed = numOr(res.failedCount, 0)
+					const artCount = ((res.entries && res.entries.length) || 0)
+					const imgCount = ((res.images && res.images.length) || 0)
+					const summaryText = [
+						artCount > 0 ? `${artCount} 条资讯` : null,
+						imgCount > 0 ? `${imgCount} 张插画` : null
+					].filter(Boolean).join(' + ') || '0 条内容'
 					setTestLine({
 						ok: true,
-						text: '成功：' + Math.round((res.durationMs || 0) / 1000) + 's，' + ((res.entries && res.entries.length) || 0) + ' 条，已投到 ' + n + ' 个会话' + (failed > 0 ? '（' + failed + ' 个失败）' : '') + '（' + tokens + ' token）'
+						text: '成功：' + Math.round((res.durationMs || 0) / 1000) + 's，' + summaryText + '，已投到 ' + n + ' 个会话' + (failed > 0 ? '（' + failed + ' 个失败）' : '') + '（' + tokens + ' token）'
 					})
 				}, (e) => {
 					setTestLine({ ok: false, text: '失败：' + (e.message || '未知原因') })
@@ -792,6 +813,12 @@ window.__ModuleLoader__.load({
 			}
 
 			return h('div', null,
+				h(Row, {
+					label: '资讯采集总开关',
+					control: toggleBtn(cfg.collectEnabled !== false, () => patch({ collectEnabled: !(cfg.collectEnabled !== false) }), '☑ 开启', '☐ 关闭'),
+					note: '控制是否主动检索网络新闻与自定义源；关闭后仅推送图库或休眠'
+				}),
+				h(Divider, null),
 				h('div', { style: rowStyle }, h('span', { style: labelStyle }, '采集方法')),
 				h('div', { style: { paddingLeft: 4 } }, methodRows),
 				h(Divider, null),
@@ -863,6 +890,371 @@ window.__ModuleLoader__.load({
 					note: '超过这个时长就中止这次运行',
 					onChange: (n) => patch({ ego: { ...(cfg.ego || {}), timeoutSec: n } })
 				}))
+		}
+
+		// ── ③-2 图库采集子菜单 ──────────────────────────────────────────
+		function GalleryBox(props) {
+			const { cfg, patch } = props
+			const gCfg = cfg.gallery || {
+				enabled: true,
+				maxImagesPerRun: 1,
+				mode: 'mixed',
+				requestTriggerEnabled: true,
+				lolicon: { enabled: true, rating: 'general', timeRange: '2y', customDate: '', tags: '', num: 1 },
+				yande: { enabled: true, rating: 'general', sort: 'score', timeRange: '2y', customDate: '', tags: '', num: 1 },
+				danbooru: { enabled: true, rating: 'general', sort: 'rank', timeRange: '2y', customDate: '', tags: '', num: 1 }
+			}
+
+			const [testStates, setTestStates] = React.useState({})
+			const [previewImg, setPreviewImg] = React.useState(null)
+
+			const setG = (next) => patch({ gallery: { ...gCfg, ...next } })
+			const setSub = (key, next) => setG({ [key]: { ...(gCfg[key] || {}), ...next } })
+
+			const doTest = async (sourceId) => {
+				setTestStates(prev => ({ ...prev, [sourceId]: { testing: true, msg: '正在请求测试图片…' } }))
+				try {
+					const res = await rpc('gallery.test', { sourceId, cfg: gCfg[sourceId] || {} })
+					if (res && res.ok && res.image) {
+						setTestStates(prev => ({ ...prev, [sourceId]: { testing: false, msg: `✅ ${res.note || '测试成功'}` } }))
+						setPreviewImg(res.image)
+					} else {
+						setTestStates(prev => ({ ...prev, [sourceId]: { testing: false, msg: `⚠️ ${res?.error || '未返回图片'}` } }))
+					}
+				} catch (e) {
+					setTestStates(prev => ({ ...prev, [sourceId]: { testing: false, msg: `❌ 失败: ${e.message || '未知错误'}` } }))
+				}
+				setTimeout(() => {
+					setTestStates(prev => ({ ...prev, [sourceId]: { ...(prev[sourceId] || {}), msg: '' } }))
+				}, 6000)
+			}
+
+			// 中文分级选项
+			const CHINESE_RATINGS = [
+				{ id: 'general', label: '全年龄常规 (Safe/General)' },
+				{ id: 'sensitive', label: '轻微敏感/微色 (Sensitive)' },
+				{ id: 'questionable', label: '限制级/擦边 (Questionable)' },
+				{ id: 'explicit', label: '完全成人向 (Explicit/R-18)' },
+				{ id: 'all', label: '全部随机 (All)' }
+			]
+
+			// 下拉式时间筛选选项
+			const TIME_RANGE_SELECT_OPTIONS = [
+				{ id: '1y', label: '近 1 年 (2025~2026 最新推荐)' },
+				{ id: '2y', label: '近 2 年 (2024~2026 丰富优质)' },
+				{ id: '3y', label: '近 3 年 (2023~2026 经典兼备)' },
+				{ id: 'custom', label: '自定义起始日期 (精确筛选)' },
+				{ id: 'all', label: '全部历史 (不限发布时间)' }
+			]
+
+			// Yande.re 榜单/排序选项
+			const YANDE_SORT_OPTIONS = [
+				{ id: 'score', label: '⭐ 高赞榜 (Score/得分排行)' },
+				{ id: 'fav', label: '💖 高收藏榜 (Fav/收藏排行)' },
+				{ id: 'recent', label: '⏱️ 最新发布 (Recent/随机翻页)' },
+				{ id: 'random', label: '🎲 随机探索 (Random/完全随机)' }
+			]
+
+			// Danbooru 榜单/排序选项
+			const DANBOORU_SORT_OPTIONS = [
+				{ id: 'rank', label: '🔥 热门趋势榜 (Rank/日周榜推荐)' },
+				{ id: 'score', label: '⭐ 高赞榜 (Score/点赞排序)' },
+				{ id: 'favcount', label: '💖 高收藏榜 (Favcount/收藏排序)' },
+				{ id: 'recent', label: '⏱️ 最新发布 (Recent/随机翻页)' },
+				{ id: 'random', label: '🎲 随机探索 (Random/完全随机)' }
+			]
+
+			// 计算各渠道开启时的图片累加总数
+			const totalImages = [
+				gCfg.lolicon?.enabled !== false ? (Number(gCfg.lolicon?.num) || 1) : 0,
+				gCfg.yande?.enabled !== false ? (Number(gCfg.yande?.num) || 1) : 0,
+				gCfg.danbooru?.enabled !== false ? (Number(gCfg.danbooru?.num) || 1) : 0
+			].reduce((a, b) => a + b, 0)
+
+			// 时间筛选下拉渲染辅助
+			const renderTimeSelector = (sourceKey, currentVal, customDateVal) => {
+				const isCustom = (currentVal || '2y') === 'custom'
+				return h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+					h('select', {
+						style: { ...inputStyle, width: 220, padding: '0 8px' },
+						value: currentVal || '2y',
+						onChange: (e) => setSub(sourceKey, { timeRange: e.target.value })
+					}, TIME_RANGE_SELECT_OPTIONS.map(opt => h('option', { key: opt.id, value: opt.id }, opt.label))),
+					isCustom ? h('input', {
+						type: 'date',
+						style: { ...inputStyle, width: 150, padding: '0 6px' },
+						value: customDateVal || '2024-01-01',
+						onChange: (e) => setSub(sourceKey, { customDate: e.target.value })
+					}) : null
+				)
+			}
+
+			return h('div', null,
+				h(Row, {
+					label: '图库采集总开关',
+					control: toggleBtn(gCfg.enabled !== false, () => setG({ enabled: !(gCfg.enabled !== false) }), '☑ 开启', '☐ 关闭'),
+					note: '一键启用/停用二次元动漫插画与色图抓取推送'
+				}),
+				h('div', {
+					style: {
+						margin: '6px 0 10px 0',
+						padding: '8px 12px',
+						borderRadius: 6,
+						background: 'rgba(235, 144, 58, 0.1)',
+						border: '1px solid rgba(235, 144, 58, 0.3)',
+						fontSize: 12,
+						lineHeight: 1.5,
+						color: '#eb903a'
+					}
+				}, '⚠️ 注意：如果是连接 QQ 机器人投递或者 NapCatQQ 投递，频繁发图或发送色图可能会触发 QQ 官方风控，请谨慎开启或合理控制频率。'),
+				h(Row, {
+					label: '群内搜图/点图互动',
+					control: toggleBtn(gCfg.requestTriggerEnabled !== false, () => setG({ requestTriggerEnabled: !(gCfg.requestTriggerEnabled !== false) }), '☑ 启用', '☐ 停用'),
+					note: '群友在 QQ 群发送「图库采集：找XXX」或「点图：找XXX」时，机器人自动识别并推图回复'
+				}),
+				h(Divider, null),
+
+				h(Row, {
+					label: '当前推送图片总计',
+					control: h('span', { style: { fontWeight: 600, color: '#3fb950', fontSize: 13 } }, `${totalImages} 张图片 / 次`),
+					note: '由下方各启用图源设置的「出图张数」自动累加求和'
+				}),
+				h(Divider, null),
+
+				// 1. Lolicon (Pixiv)
+				h('div', {
+					style: {
+						padding: '10px 12px',
+						marginBottom: 10,
+						borderRadius: 8,
+						border: '1px solid var(--dsw-alias-border-l2)',
+						background: 'var(--dsw-alias-bg-l2, rgba(255,255,255,0.03))'
+					}
+				},
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+							h('span', { style: { fontWeight: 600, fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, '🌸 Lolicon API (Pixiv 热门/色图)'),
+							h('span', { style: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#3fb950', color: '#fff' } }, 'Pixiv直连反代')
+						),
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+							h('button', {
+								style: { ...buttonGhost, height: 24, fontSize: 11, padding: '0 8px' },
+								onClick: () => doTest('lolicon'),
+								disabled: testStates.lolicon?.testing
+							}, testStates.lolicon?.testing ? '测试中…' : '🧪 测试拉取'),
+							toggleBtn(gCfg.lolicon?.enabled !== false, () => setSub('lolicon', { enabled: !(gCfg.lolicon?.enabled !== false) }), '☑ 启用', '☐ 禁用')
+						)
+					),
+					testStates.lolicon?.msg ? h('div', { style: { ...hintStyle, color: testStates.lolicon.msg.startsWith('✅') ? '#3fb950' : '#e5534b' } }, testStates.lolicon.msg) : null,
+					h(NumRow, {
+						label: '本源出图张数',
+						value: numOr(gCfg.lolicon?.num, 1),
+						min: 1,
+						max: 5,
+						note: '该渠道每次采集抽选张数（1~5 张）',
+						onChange: (n) => setSub('lolicon', { num: n })
+					}),
+					h(Row, {
+						label: '内容分级',
+						control: h('div', { style: wrapRow },
+							[
+								{ id: 'general', label: '全年龄常规 (Safe)' },
+								{ id: 'explicit', label: '完全成人向 (R-18)' },
+								{ id: 'all', label: '全部混合 (All)' }
+							].map(opt => tabButton(
+								(gCfg.lolicon?.rating || 'general') === opt.id,
+								opt.label,
+								() => setSub('lolicon', { rating: opt.id })
+							))),
+						note: '按 Pixiv 官方标记分级，纯色图选 R-18，安全插画选全年龄'
+					}),
+					h(Row, {
+						label: '时间筛选 (下拉式)',
+						control: renderTimeSelector('lolicon', gCfg.lolicon?.timeRange, gCfg.lolicon?.customDate),
+						note: '限定作品上传时间，支持下拉选择或直接指定起始年月日'
+					}),
+					h(Row, {
+						label: '标签筛选 (Tags)',
+						control: h('input', {
+							style: { ...inputStyle, width: 280 },
+							value: gCfg.lolicon?.tags || '',
+							placeholder: '例如: 白毛, 黑丝, 崩坏星穹铁道, 碧蓝档案',
+							onChange: (e) => setSub('lolicon', { tags: e.target.value })
+						}),
+						note: '【标签格式】：支持中文或日文标签，多个标签用逗号隔开；留空表示全库随机'
+					})
+				),
+
+				// 2. Yande.re (Booru)
+				h('div', {
+					style: {
+						padding: '10px 12px',
+						marginBottom: 10,
+						borderRadius: 8,
+						border: '1px solid var(--dsw-alias-border-l2)',
+						background: 'var(--dsw-alias-bg-l2, rgba(255,255,255,0.03))'
+					}
+				},
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+							h('span', { style: { fontWeight: 600, fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, '⚡ Yande.re API (Booru 高清二次元插画)'),
+							h('span', { style: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#3fb950', color: '#fff' } }, '超高清大图')
+						),
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+							h('button', {
+								style: { ...buttonGhost, height: 24, fontSize: 11, padding: '0 8px' },
+								onClick: () => doTest('yande'),
+								disabled: testStates.yande?.testing
+							}, testStates.yande?.testing ? '测试中…' : '🧪 测试拉取'),
+							toggleBtn(gCfg.yande?.enabled !== false, () => setSub('yande', { enabled: !(gCfg.yande?.enabled !== false) }), '☑ 启用', '☐ 禁用')
+						)
+					),
+					testStates.yande?.msg ? h('div', { style: { ...hintStyle, color: testStates.yande.msg.startsWith('✅') ? '#3fb950' : '#e5534b' } }, testStates.yande.msg) : null,
+					h(NumRow, {
+						label: '本源出图张数',
+						value: numOr(gCfg.yande?.num, 1),
+						min: 1,
+						max: 5,
+						note: '该渠道每次采集抽选张数（1~5 张）',
+						onChange: (n) => setSub('yande', { num: n })
+					}),
+					h(Row, {
+						label: '榜单与排序',
+						control: h('select', {
+							style: { ...inputStyle, width: 260, padding: '0 8px' },
+							value: gCfg.yande?.sort || 'score',
+							onChange: (e) => setSub('yande', { sort: e.target.value })
+						}, YANDE_SORT_OPTIONS.map(opt => h('option', { key: opt.id, value: opt.id }, opt.label))),
+						note: '支持高赞评分榜(Score)、高收藏榜(Fav)与最新发布，配合时间筛选获取近年最热门高品质画作'
+					}),
+					h(Row, {
+						label: '内容分级',
+						control: h('div', { style: wrapRow },
+							[
+								{ id: 'general', label: '全年龄常规 (Safe)' },
+								{ id: 'questionable', label: '限制级/擦边 (Questionable)' },
+								{ id: 'explicit', label: '完全成人向 (Explicit)' },
+								{ id: 'all', label: '全部随机 (All)' }
+							].map(opt => tabButton(
+								(gCfg.yande?.rating || 'general') === opt.id,
+								opt.label,
+								() => setSub('yande', { rating: opt.id })
+							))),
+						note: 'Safe 为壁纸向；Questionable 略带性感擦边；Explicit 为纯色图'
+					}),
+					h(Row, {
+						label: '时间筛选 (下拉式)',
+						control: renderTimeSelector('yande', gCfg.yande?.timeRange, gCfg.yande?.customDate),
+						note: '【过滤老图】：推荐选择近 1~2 年，彻底告别十年前的泛黄扫图'
+					}),
+					h(Row, {
+						label: '标签筛选 (Tags)',
+						control: h('input', {
+							style: { ...inputStyle, width: 280 },
+							value: gCfg.yande?.tags || '',
+							placeholder: '例如: maid thighhighs solo blue_archive',
+							onChange: (e) => setSub('yande', { tags: e.target.value })
+						}),
+						note: '【标签格式】：Booru 规范英文标签（小写、单词用下划线 _，多个用空格隔开）'
+					})
+				),
+
+				// 3. Danbooru
+				h('div', {
+					style: {
+						padding: '10px 12px',
+						marginBottom: 10,
+						borderRadius: 8,
+						border: '1px solid var(--dsw-alias-border-l2)',
+						background: 'var(--dsw-alias-bg-l2, rgba(255,255,255,0.03))'
+					}
+				},
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+							h('span', { style: { fontWeight: 600, fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, '🌐 Danbooru API (全球最大动漫图库)'),
+							h('span', { style: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#3fb950', color: '#fff' } }, '更新最频繁')
+						),
+						h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+							h('button', {
+								style: { ...buttonGhost, height: 24, fontSize: 11, padding: '0 8px' },
+								onClick: () => doTest('danbooru'),
+								disabled: testStates.danbooru?.testing
+							}, testStates.danbooru?.testing ? '测试中…' : '🧪 测试拉取'),
+							toggleBtn(gCfg.danbooru?.enabled !== false, () => setSub('danbooru', { enabled: !(gCfg.danbooru?.enabled !== false) }), '☑ 启用', '☐ 禁用')
+						)
+					),
+					testStates.danbooru?.msg ? h('div', { style: { ...hintStyle, color: testStates.danbooru.msg.startsWith('✅') ? '#3fb950' : '#e5534b' } }, testStates.danbooru.msg) : null,
+					h(NumRow, {
+						label: '本源出图张数',
+						value: numOr(gCfg.danbooru?.num, 1),
+						min: 1,
+						max: 5,
+						note: '该渠道每次采集抽选张数（1~5 张）',
+						onChange: (n) => setSub('danbooru', { num: n })
+					}),
+					h(Row, {
+						label: '榜单与排序',
+						control: h('select', {
+							style: { ...inputStyle, width: 260, padding: '0 8px' },
+							value: gCfg.danbooru?.sort || 'rank',
+							onChange: (e) => setSub('danbooru', { sort: e.target.value })
+						}, DANBOORU_SORT_OPTIONS.map(opt => h('option', { key: opt.id, value: opt.id }, opt.label))),
+						note: '支持日/周趋势排行榜(Rank)、高赞榜(Score)、高收藏榜(Favcount)等，在精选池内随机翻页抽选，彻底避免重复'
+					}),
+					h(Row, {
+						label: '内容分级',
+						control: h('div', { style: wrapRow },
+							CHINESE_RATINGS.map(opt => tabButton(
+								(gCfg.danbooru?.rating || 'general') === opt.id,
+								opt.label,
+								() => setSub('danbooru', { rating: opt.id })
+							))),
+						note: 'Danbooru 官方精确四级分级：常规 / 轻微敏感(微色) / 限制级擦边 / 完全成人向'
+					}),
+					h(Row, {
+						label: '时间筛选 (下拉式)',
+						control: renderTimeSelector('danbooru', gCfg.danbooru?.timeRange, gCfg.danbooru?.customDate),
+						note: '按投稿时间筛选，支持下拉范围或指定年月日起始'
+					}),
+					h(Row, {
+						label: '标签筛选 (Tags)',
+						control: h('input', {
+							style: { ...inputStyle, width: 280 },
+							value: gCfg.danbooru?.tags || '',
+							placeholder: '例如: 1girl blue_hair highres',
+							onChange: (e) => setSub('danbooru', { tags: e.target.value })
+						}),
+						note: '【标签格式】：Booru 规范英文标签（小写下划线，空格隔开；建议 1~2 个关键 Tag 如 1girl）'
+					})
+				),
+
+				// 实时测试预览卡片
+				previewImg ? h('div', {
+					style: {
+						marginTop: 12,
+						padding: 12,
+						borderRadius: 8,
+						border: '1px solid #339CFF',
+						background: 'rgba(51, 156, 255, 0.08)'
+					}
+				},
+					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+						h('span', { style: { fontWeight: 600, fontSize: 13, color: '#339CFF' } }, `🖼️ 采样预览 · ${previewImg.sourceName} - ${previewImg.title}`),
+						h('button', { style: { ...buttonGhost, height: 22, padding: '0 6px', fontSize: 11 }, onClick: () => setPreviewImg(null) }, '关闭预览')
+					),
+					h('div', { style: { textAlign: 'center', maxHeight: 300, overflow: 'hidden', borderRadius: 6, background: '#000' } },
+						h('img', {
+							src: previewImg.previewUrl || previewImg.url,
+							alt: previewImg.title,
+							style: { maxWidth: '100%', maxHeight: 290, objectFit: 'contain' }
+						})
+					),
+					h('div', { style: { ...hintStyle, marginTop: 6, display: 'flex', justifyContent: 'space-between' } },
+						h('span', null, `分级: ${previewImg.rating} | 画师: ${previewImg.author || '未知'}`),
+						h('a', { href: previewImg.url, target: '_blank', rel: 'noreferrer', style: { color: '#339CFF', textDecoration: 'none' } }, '查看高清原图 ↗')
+					)
+				) : null
+			)
 		}
 
 		// ── ④ 推送风格 ─────────────────────────────────────────────────
@@ -1283,13 +1675,14 @@ window.__ModuleLoader__.load({
 			if (!cfg) return h('div', { style: hintStyle }, '正在读设置…')
 
 			return h('div', { style: { padding: '2px 0' } },
-				h(Section, { title: '现在的状态', open: true }, h(StatusBox, null)),
-				h(Section, { title: '投递' }, h(TargetBox, { cfg, patch }), h(SaveNote, { save })),
-				h(Section, { title: '采集' }, h(SourceBox, { cfg, patch }), h(SaveNote, { save })),
-				h(Section, { title: '推送风格' }, h(StyleBox, { cfg, patch }), h(SaveNote, { save })),
-				h(Section, { title: '频率与运行' }, h(TimingBox, { cfg, patch }), h(SaveNote, { save })),
-				h(Section, { title: '会话状态系统弹窗通知' }, h(DesktopNotifyBox, { cfg, patch }), h(SaveNote, { save })),
-				h(Section, { title: '账单' }, h(BillBox, null)))
+				h(Section, { title: '现在的状态', open: true }, () => h(StatusBox, null)),
+				h(Section, { title: '投递' }, () => h(React.Fragment, null, h(TargetBox, { cfg, patch }), h(SaveNote, { save }))),
+				h(Section, { title: '资讯采集' }, () => h(React.Fragment, null, h(SourceBox, { cfg, patch }), h(SaveNote, { save }))),
+				h(Section, { title: '资讯推送风格' }, () => h(React.Fragment, null, h(StyleBox, { cfg, patch }), h(SaveNote, { save }))),
+				h(Section, { title: '🎨 图库采集 (插画/色图)' }, () => h(React.Fragment, null, h(GalleryBox, { cfg, patch }), h(SaveNote, { save }))),
+				h(Section, { title: '频率与运行' }, () => h(React.Fragment, null, h(TimingBox, { cfg, patch }), h(SaveNote, { save }))),
+				h(Section, { title: '会话状态系统弹窗通知' }, () => h(React.Fragment, null, h(DesktopNotifyBox, { cfg, patch }), h(SaveNote, { save }))),
+				h(Section, { title: '账单' }, () => h(BillBox, null)))
 		}
 
 		// ── 侧栏「资讯收件箱」面板 ─────────────────────────────────────
@@ -1373,6 +1766,33 @@ window.__ModuleLoader__.load({
 								const methodLabel = METHOD_LABEL[r.method] || r.method || '采集'
 								const isInboxOnly = r.targetId === 'inbox' || (Array.isArray(r.delivered) && r.delivered.some(d => d.id === 'inbox'))
 
+								// 提取并聚合图片列表：优先取 runs.jsonl 结构化的 r.images，兜底从 r.text 正则解析
+								let images = Array.isArray(r.images) && r.images.length > 0 ? r.images : []
+								if (images.length === 0 && r.text) {
+									try {
+										const mdImgRegex = /(?:🎨\s*([^\n(]+?)(?:\s*\(画师:\s*([^)]+)\))?(?:\s*\[(R18)\])?\s*：?\s*\n\s*)?!\[(.*?)\]\((https?:\/\/[^)\s]+)\)/gi
+										let m
+										while ((m = mdImgRegex.exec(r.text)) !== null) {
+											images.push({
+												title: (m[1] || m[4] || '插画').trim(),
+												author: (m[2] || '').trim(),
+												r18: Boolean(m[3]),
+												url: m[5].trim(),
+												previewUrl: m[5].trim()
+											})
+										}
+									} catch {}
+								}
+
+								// 净化 r.text，避免在下方同时渲染重复的图片 Markdown 语法
+								let cleanText = r.text || ''
+								if (images.length > 0 && cleanText) {
+									cleanText = cleanText
+										.replace(/(?:🎨\s*[^\n(]+?(?:\s*\(画师:\s*[^)]+\))?(?:\s*\[R18\])?\s*：?\s*\n\s*)?!\[.*?\]\(https?:\/\/[^)\s]+\)/gi, '')
+										.replace(/\n{3,}/g, '\n\n')
+										.trim()
+								}
+
 								return h('div', {
 									key: r.id || runIdx,
 									style: {
@@ -1399,14 +1819,16 @@ window.__ModuleLoader__.load({
 										r.test ? h('span', { style: { fontSize: 11, padding: '2px 6px', borderRadius: 4, background: 'rgba(51, 156, 255, 0.15)', color: '#339CFF' } }, '试跑') : null,
 										isInboxOnly ? h('span', { style: { fontSize: 11, padding: '2px 6px', borderRadius: 4, background: 'rgba(63, 185, 80, 0.15)', color: '#3fb950' } }, '独立收件箱') : null
 									),
-									h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } },
-										entries.length > 0 ? `共 ${entries.length} 条资讯` : '无聚合条目'
+									h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', display: 'flex', gap: 10 } },
+										entries.length > 0 ? h('span', null, `共 ${entries.length} 条资讯`) : null,
+										images.length > 0 ? h('span', { style: { color: 'var(--dsw-alias-accent, #339CFF)', fontWeight: 500 } }, `🖼️ ${images.length} 张插画`) : null,
+										entries.length === 0 && images.length === 0 ? '无聚合条目' : null
 									)
 								),
 
 								// 聚合条目网格/列表
 								entries.length > 0
-									? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+									? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, marginBottom: images.length > 0 ? 12 : 0 } },
 										entries.map((entry, eIdx) => {
 											return h('div', {
 												key: eIdx,
@@ -1450,8 +1872,138 @@ window.__ModuleLoader__.load({
 											) : null)
 										})
 									)
-									// 无 entries 时展示投递文本
-									: (r.text ? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'pre-wrap', lineHeight: 1.5 } }, r.text) : null)
+									: null,
+
+								// 🎨 插画/图片专属网格瀑布展示
+								images.length > 0
+									? h('div', {
+										style: {
+											display: 'grid',
+											gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+											gap: 12,
+											marginBottom: cleanText ? 10 : 0
+										}
+									},
+									images.map((img, imgIdx) => {
+										return h('div', {
+											key: imgIdx,
+											style: {
+												border: '1px solid var(--dsw-alias-border-l1, rgba(255,255,255,0.08))',
+												borderRadius: 8,
+												overflow: 'hidden',
+												background: 'var(--dsw-alias-bg-l1, rgba(0,0,0,0.15))',
+												display: 'flex',
+												flexDirection: 'column'
+											}
+										},
+										// 图片容器（点击外链新标签页打开高清大图）
+										h('a', {
+											href: img.url,
+											target: '_blank',
+											rel: 'noopener noreferrer',
+											title: '点击直接在新标签页打开高清大图原图',
+											style: {
+												display: 'block',
+												position: 'relative',
+												width: '100%',
+												height: 180,
+												overflow: 'hidden',
+												background: 'rgba(0,0,0,0.2)',
+												cursor: 'zoom-in'
+											}
+										},
+										h('img', {
+											src: img.previewUrl || img.url,
+											alt: img.title || '插画',
+											loading: 'lazy',
+											style: {
+												width: '100%',
+												height: '100%',
+												objectFit: 'cover',
+												transition: 'transform 0.25s ease'
+											},
+											onMouseEnter: (e) => { e.currentTarget.style.transform = 'scale(1.05)' },
+											onMouseLeave: (e) => { e.currentTarget.style.transform = 'scale(1.0)' },
+											onError: (e) => {
+												// 某些海外反代直连在特定网络下可能偶发加载失败，提供友好的回退指示
+												e.currentTarget.style.display = 'none'
+												if (e.currentTarget.parentNode) {
+													const fallbackBox = document.createElement('div')
+													fallbackBox.style.cssText = 'height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);font-size:11px;padding:8px;text-align:center;'
+													fallbackBox.innerHTML = '<span style=\"font-size:20px;margin-bottom:4px;\">🖼️</span><span>图片加载受限</span><span style=\"color:#339CFF;margin-top:2px;\">点击打开外链</span>'
+													e.currentTarget.parentNode.appendChild(fallbackBox)
+												}
+											}
+										}),
+										// R18 浮标
+										img.r18 ? h('span', {
+											style: {
+												position: 'absolute',
+												top: 6,
+												left: 6,
+												background: 'rgba(255, 77, 79, 0.9)',
+												color: '#fff',
+												fontSize: 10,
+												fontWeight: 700,
+												padding: '1px 5px',
+												borderRadius: 4
+											}
+										}, 'R18') : null,
+										// 右下角外链提示小浮标
+										h('span', {
+											style: {
+												position: 'absolute',
+												bottom: 6,
+												right: 6,
+												background: 'rgba(0, 0, 0, 0.65)',
+												color: '#fff',
+												fontSize: 10,
+												padding: '2px 6px',
+												borderRadius: 4,
+												backdropFilter: 'blur(4px)',
+												pointerEvents: 'none'
+											}
+										}, '↗ 外链')
+										),
+										// 图片底部信息
+										h('div', { style: { padding: '8px 10px', fontSize: 11, display: 'flex', flexDirection: 'column', gap: 2 } },
+											h('div', {
+												style: {
+													fontWeight: 600,
+													color: 'var(--dsw-alias-label-primary)',
+													overflow: 'hidden',
+													textOverflow: 'ellipsis',
+													whiteSpace: 'nowrap'
+												},
+												title: img.title
+											}, img.title || '精选插画'),
+											h('div', {
+												style: {
+													display: 'flex',
+													alignItems: 'center',
+													justifyContent: 'space-between',
+													color: 'var(--dsw-alias-label-tertiary)',
+													fontSize: 10
+												}
+											},
+											img.author ? h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `画师: ${img.author}`) : h('span', null, '精选画作'),
+											h('a', {
+												href: img.url,
+												target: '_blank',
+												rel: 'noopener noreferrer',
+												style: { color: '#339CFF', textDecoration: 'none', flex: 'none', marginLeft: 4 }
+											}, '外链 ↗')
+											)
+										)
+										)
+									})
+									)
+									: null,
+
+								// 剩余正文文本（若有）
+								cleanText
+									? h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'pre-wrap', lineHeight: 1.5, marginTop: (entries.length > 0 || images.length > 0) ? 8 : 0 } }, cleanText)
+									: null
 								)
 							}),
 

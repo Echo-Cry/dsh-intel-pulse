@@ -1,8 +1,8 @@
 {
   "name": "dsh-intel-pulse",
-  "version": "0.8.9",
+  "version": "0.9.0",
   "type": "module",
-  "description": "自主搜索指定的网络资讯推送，推送到会话或 IM；全局会话状态系统弹窗通知",
+  "description": "自主搜索指定的网络资讯与精选二次元/色图插画推送，推送到会话或 IM；全局会话状态系统弹窗通知",
   "author": "Echo-Cry <kcrystal360049@gmail.com>",
   "license": "MIT",
   "repository": {
